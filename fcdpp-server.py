@@ -7,16 +7,28 @@ BUFFER_SIZE = 1024 # from dspserver
 PERIOD = 1024 # BUFFER_SIZE*4/N, N=4
 TXLEN = 500 # from dspserver
 
+class SharedData(object):
+	def __init__(self, *args, **kwargs):
+		self.mutex = threading.Lock()
+		self.clients = {}
+		self.receivers = {}
+
+	def acquire(self):
+		self.mutex.acquire()
+
+	def release(self):
+		self.mutex.release()
+
 class Listener(SocketServer.ThreadingTCPServer):
-	def __init__(self, server_address, RequestHandlerClass, clients):
+	def __init__(self, server_address, RequestHandlerClass, data):
 		SocketServer.ThreadingTCPServer.__init__(self, server_address, RequestHandlerClass)
-		self.clients = clients
+		self.data = data
 
 class ListenerHandler(SocketServer.BaseRequestHandler):
 	def handle(self):
-		self.server.clients[0].acquire()
-		self.server.clients[1][self.client_address] = [-1, -1, -1]
-		self.server.clients[0].release()
+		self.server.data.acquire()
+		self.server.data.clients[self.client_address] = [-1, -1, -1]
+		self.server.data.release()
 		while 1:
 			try:
 				data = self.request.recv(CMDLEN)
@@ -26,48 +38,48 @@ class ListenerHandler(SocketServer.BaseRequestHandler):
 				break
 			m = re.search('^attach (\d+)', data, re.M)
 			if m:
-				self.server.clients[0].acquire()
-				if self.server.clients[1][self.client_address][0]!=-1:
-					self.server.clients[0].release()
+				self.server.data.acquire()
+				if self.server.data.clients[self.client_address][0]!=-1:
+					self.server.data.release()
 					self.request.sendall('Error: Client is already attached to receiver')
 					continue
-				if int(m.group(1)) not in self.server.clients[2].keys():
-					self.server.clients[0].release()
+				if int(m.group(1)) not in self.server.data.receivers.keys():
+					self.server.data.release()
 					self.request.sendall('Error: Invalid Receiver')
 					continue
-				if int(m.group(1)) in [i[0] for i in self.server.clients[1]]:
-					self.server.clients[0].release()
+				if int(m.group(1)) in [i[0] for i in self.server.data.clients]:
+					self.server.data.release()
 					self.request.sendall('Error: Receiver in use')
 					continue
-				self.server.clients[1][self.client_address] = [int(m.group(1)), socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP), -1]
-				self.server.clients[0].release()
+				self.server.data.clients[self.client_address] = [int(m.group(1)), socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP), -1]
+				self.server.data.release()
 				self.request.sendall('OK 192000')
 				continue
 			m = re.search('^detach (\d+)', data, re.M)
 			if m:
-				self.server.clients[0].acquire()
-				if self.server.clients[1][self.client_address][0]==-1:
-					self.server.clients[0].release()
+				self.server.data.acquire()
+				if self.server.data.clients[self.client_address][0]==-1:
+					self.server.data.release()
 					self.request.sendall('Error: Client is not attached to receiver')
 					continue
-				if self.server.clients[1][self.client_address][0]!=int(m.group(1)):
-					self.server.clients[0].release()
+				if self.server.data.clients[self.client_address][0]!=int(m.group(1)):
+					self.server.data.release()
 					self.request.sendall('Error: Invalid Receiver')
 					continue
-				self.server.clients[1][self.client_address] = [-1, -1, -1]
-				self.server.clients[0].release()
+				self.server.data.clients[self.client_address] = [-1, -1, -1]
+				self.server.data.release()
 				self.request.sendall('OK 192000')
 				continue
 			m = re.search('^frequency ([0-9.,e+-]+)', data, re.M)
 			if m:
-				self.server.clients[0].acquire()
-				if self.server.clients[1][self.client_address][0]==-1:
-					self.server.clients[0].release()
+				self.server.data.acquire()
+				if self.server.data.clients[self.client_address][0]==-1:
+					self.server.data.release()
 					self.request.sendall('Error: Client is not attached to receiver')
 					continue
-				idx = self.server.clients[1][self.client_address][0]
-				cd = self.server.clients[2][idx]
-				self.server.clients[0].release()
+				idx = self.server.data.clients[self.client_address][0]
+				cd = self.server.data.receivers[idx]
+				self.server.data.release()
 				try:
 					freq = int(m.group(1))
 					setfreq(cd, freq)
@@ -78,30 +90,30 @@ class ListenerHandler(SocketServer.BaseRequestHandler):
 				continue
 			m = re.search('^start (iq|bandscope) (\d+)', data, re.M)
 			if m:
-				self.server.clients[0].acquire()
-				if self.server.clients[1][self.client_address][0]==-1:
-					self.server.clients[0].release()
+				self.server.data.acquire()
+				if self.server.data.clients[self.client_address][0]==-1:
+					self.server.data.release()
 					self.request.sendall('Error: Client is not attached to receiver')
 					continue
 				if m.group(1)=='iq':
-					self.server.clients[1][self.client_address][2] = int(m.group(2))
-				self.server.clients[0].release()
+					self.server.data.clients[self.client_address][2] = int(m.group(2))
+				self.server.data.release()
 				self.request.sendall('OK')
 				continue
 			m = re.search('^stop (iq|bandscope)', data, re.M)
 			if m:
-				self.server.clients[0].acquire()
-				if self.server.clients[1][self.client_address][0]==-1:
-					self.server.clients[0].release()
+				self.server.data.acquire()
+				if self.server.data.clients[self.client_address][0]==-1:
+					self.server.data.release()
 					self.request.sendall('Error: Client is not attached to receiver')
 					continue
 				if m.group(1)=='iq':
-					if self.server.clients[1][self.client_address][2]==-1:
-						self.server.clients[0].release()
+					if self.server.data.clients[self.client_address][2]==-1:
+						self.server.data.release()
 						self.request.sendall('Error: Client is not started')
 						continue
-					self.server.clients[1][self.client_address][2] = -1
-				self.server.clients[0].release()
+					self.server.data.clients[self.client_address][2] = -1
+				self.server.data.release()
 				self.request.sendall('OK')
 				continue
 			#m = re.search('^hardware\?', data, re.M)
@@ -109,16 +121,16 @@ class ListenerHandler(SocketServer.BaseRequestHandler):
 			#	self.request.sendall('OK fcdproplus')
 			#	continue
 			self.request.sendall('Error: Invalid Command')
-		self.server.clients[0].acquire()
-		self.server.clients[1].pop(self.client_address)
-		self.server.clients[0].release()
+		self.server.data.acquire()
+		self.server.data.clients.pop(self.client_address)
+		self.server.data.release()
 
 def listener(h, p, c):
 	server = Listener((h, p), ListenerHandler, c)
 	server.serve_forever()
 
 def create_listener_thread(h, p):
-	c = (threading.Lock(), {}, {})
+	c = SharedData()
 	t = threading.Thread(target=listener, args=(h, p, c))
 	t.start()
 	return (c, t)
@@ -129,32 +141,30 @@ def short2float(inp, offset):
 	data = ''.join(data)
 	return data
 
-def fcdproplus_io(clients, ad, cd, idx):
+def fcdproplus_io(data, ad, cd, idx):
 	fcdpp_init(cd)
-	clients[0].acquire()
-	if idx in clients[2].keys():
-		clients[0].release()
+	data.acquire()
+	if idx in data.receivers.keys():
+		data.release()
 		raise IOError, 'Receiver with inde %d already connected' % (idx)
-	clients[2][idx] = cd
-	clients[0].release()
+	data.receivers[idx] = cd
+	data.release()
 	pcm = alsaaudio.PCM(type=alsaaudio.PCM_CAPTURE, mode=alsaaudio.PCM_NORMAL, card=ad)
 	pcm.setchannels(2)
 	pcm.setrate(192000)
 	pcm.setformat(alsaaudio.PCM_FORMAT_S16_LE)
 	pcm.setperiodsize(PERIOD)
-	clients[0].acquire()
-	clients[0].release()
 	seq = 0L
 	while 1:
-		length, data = pcm.read()
+		length, audio = pcm.read()
 		rcv = []
-		clients[0].acquire()
-		for i in clients[1].keys():
-			if clients[1][i][0]==idx and clients[1][i][2]!=-1:
-				rcv.append((clients[1][i][1], (i[0], clients[1][i][2])))
-		clients[0].release()
-		for i in xrange(0, len(data)/(4*BUFFER_SIZE)):
-			txdata = short2float(data[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 0) + short2float(data[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 2) 
+		data.acquire()
+		for i in data.clients.keys():
+			if data.clients[i][0]==idx and data.clients[i][2]!=-1:
+				rcv.append((data.clients[i][1], (i[0], data.clients[i][2])))
+		data.release()
+		for i in xrange(0, len(audio)/(4*BUFFER_SIZE)):
+			txdata = short2float(audio[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 0) + short2float(audio[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 2) 
 			for j in xrange(0, (len(txdata)+TXLEN-1)/(TXLEN)):
 				for k in rcv:
 					snd = struct.pack('LHH', seq, j*TXLEN, min(len(txdata)-j*TXLEN, TXLEN))
@@ -203,8 +213,8 @@ def create_fcdproplus_thread(clients, ad=autodetect_ad(), cd=autodetect_cd(), id
 	t.start()
 	return (ad, cd, idx, t)
 
-clients, lt = create_listener_thread('0.0.0.0', 11000)
-ad, cd, idx, ft = create_fcdproplus_thread(clients)
+data, lt = create_listener_thread('0.0.0.0', 11000)
+ad, cd, idx, ft = create_fcdproplus_thread(data)
 
 try:
 	while 1:
