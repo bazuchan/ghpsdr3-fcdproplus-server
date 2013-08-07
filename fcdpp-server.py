@@ -239,9 +239,9 @@ def fcdproplus_io(shared, fcd, idx):
 		shared.release()
 		for i in xrange(0, len(audio)/(4*BUFFER_SIZE)):
 			if fcd.swapiq:
-				txdata = short2float(audio[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 2) + short2float(audio[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 0) 
-			else:
 				txdata = short2float(audio[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 0) + short2float(audio[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 2) 
+			else:
+				txdata = short2float(audio[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 2) + short2float(audio[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 0) 
 			for j in xrange(0, (len(txdata)+TXLEN-1)/(TXLEN)):
 				for k in rcv:
 					snd = struct.pack('LHH', seq, j*TXLEN, min(len(txdata)-j*TXLEN, TXLEN))
