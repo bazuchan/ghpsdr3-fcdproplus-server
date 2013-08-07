@@ -1,6 +1,6 @@
 #!/usr/bin/python
 
-import threading, SocketServer, alsaaudio, socket, time, re, sys, struct, os, hid
+import threading, SocketServer, alsaaudio, socket, time, re, sys, struct, os, hid, numpy
 
 CMDLEN = 1024 # should always fit
 BUFFER_SIZE = 1024 # from dspserver
@@ -214,12 +214,6 @@ def create_listener_thread(h, p):
 	t.start()
 	return (c, t)
 
-def short2float(inp, offset):
-	data = [struct.unpack('h', inp[i*4+offset:i*4+offset+2])[0] for i in xrange(0, len(inp)/4)]
-	data = [struct.pack('f', i/32767.0) for i in data]
-	data = ''.join(data)
-	return data
-
 def fcdproplus_io(shared, fcd, idx):
 	shared.acquire()
 	if idx in shared.receivers.keys():
@@ -237,11 +231,13 @@ def fcdproplus_io(shared, fcd, idx):
 			if shared.clients[caddr].receiver==idx and shared.clients[caddr].port!=-1:
 				rcv.append((shared.clients[caddr].socket, (caddr[0], shared.clients[caddr].port)))
 		shared.release()
-		for i in xrange(0, len(audio)/(4*BUFFER_SIZE)):
+		naudio = numpy.fromstring(audio, dtype="<h")/numpy.float32(32767.0)
+		naudio.resize(len(naudio)/(BUFFER_SIZE*2), BUFFER_SIZE*2)
+		for i in naudio:
 			if fcd.swapiq:
-				txdata = short2float(audio[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 0) + short2float(audio[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 2) 
+				txdata = i[::2].tostring() + i[1::2].tostring()
 			else:
-				txdata = short2float(audio[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 2) + short2float(audio[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 0) 
+				txdata = i[1::2].tostring() + i[::2].tostring()
 			for j in xrange(0, (len(txdata)+TXLEN-1)/(TXLEN)):
 				for k in rcv:
 					snd = struct.pack('LHH', seq, j*TXLEN, min(len(txdata)-j*TXLEN, TXLEN))
