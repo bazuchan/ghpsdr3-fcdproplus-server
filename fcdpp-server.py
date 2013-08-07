@@ -25,6 +25,76 @@ class ConnectedClient(object):
 		self.receiver = -1
 		self.port = -1
 
+class FCDProPlus(object):
+	def __init__(self, ad=None, cd=None, swapiq=None, lna_gain=True, mixer_gain=True, if_gain=0, init_freq=7000000):
+		self.ad = ad
+		if not self.ad:
+			self.ad = self.autodetect_ad()
+		self.cd = cd
+		if not self.cd:
+			self.cd = self.autodetect_cd()
+		if not self.ad or not self.cd:
+			raise IOError, 'FCDPro+ device not found'
+		self.swapiq = swapiq
+
+		self.ver = self.get_fw_ver()
+		self.set_lna_gain(lna_gain)
+		self.set_mixer_gain(mixer_gain)
+		self.set_if_gain(if_gain)
+		self.set_freq(init_freq)
+
+	def autodetect_ad(self):
+		try:
+			return 'hw:%s' % (alsaaudio.cards().index('V20'))
+		except:
+			return None
+
+	def autodetect_cd(self):
+		return (0x04d8, 0xfb31)
+
+	def get_fw_ver(self):
+		d = apply(hid.device, self.cd)
+		d.write([0,1])
+		ver = d.read(65)[2:15]
+		d.close()
+		return ver
+
+	def set_lna_gain(self, lna_gain):
+		d = apply(hid.device, self.cd)
+		d.write([0, 110, int(bool(lna_gain))])
+		if d.read(65)[0]!=110:
+			raise IOError, 'Cant set lna gain'
+		d.close()
+
+	def set_mixer_gain(self, mixer_gain):
+		d = apply(hid.device, self.cd)
+		d.write([0, 114, int(bool(mixer_gain))])
+		if d.read(65)[0]!=114:
+			raise IOError, 'Cant set mixer gain'
+		d.close()
+
+	def set_if_gain(self, if_gain):
+		d = apply(hid.device, self.cd)
+		d.write([0, 117, if_gain])
+		if d.read(65)[0]!=117:
+			raise IOError, 'Cant set if gain'
+		d.close()
+
+	def set_freq(self, freq):
+		d = apply(hid.device, self.cd)
+		d.write([0, 101] + map(ord, struct.pack('I', freq)))
+		if d.read(65)[0]!=101:
+			raise IOError, 'Cant set freq'
+		d.close()
+
+	def get_pcm(self, period=1024):
+		pcm = alsaaudio.PCM(type=alsaaudio.PCM_CAPTURE, mode=alsaaudio.PCM_NORMAL, card=self.ad)
+		pcm.setchannels(2)
+		pcm.setrate(192000)
+		pcm.setformat(alsaaudio.PCM_FORMAT_S16_LE)
+		pcm.setperiodsize(period)
+		return pcm
+
 class Listener(SocketServer.ThreadingTCPServer):
 	def __init__(self, server_address, RequestHandlerClass, shared):
 		SocketServer.ThreadingTCPServer.__init__(self, server_address, RequestHandlerClass)
@@ -87,11 +157,11 @@ class ListenerHandler(SocketServer.BaseRequestHandler):
 					self.request.sendall('Error: Client is not attached to receiver')
 					continue
 				idx = shared.clients[caddr].receiver
-				cd = shared.receivers[idx]
+				fcd = shared.receivers[idx]
 				shared.release()
 				try:
 					freq = int(m.group(1))
-					setfreq(cd, freq)
+					fcd.set_freq(freq)
 				except:
 					self.request.sendall('Error: Invalid frequency')
 					continue
@@ -150,19 +220,14 @@ def short2float(inp, offset):
 	data = ''.join(data)
 	return data
 
-def fcdproplus_io(shared, ad, cd, swapiq, idx):
-	fcdpp_init(cd)
+def fcdproplus_io(shared, fcd, idx):
 	shared.acquire()
 	if idx in shared.receivers.keys():
 		shared.release()
 		raise IOError, 'Receiver with inde %d already connected' % (idx)
-	shared.receivers[idx] = cd
+	shared.receivers[idx] = fcd
 	shared.release()
-	pcm = alsaaudio.PCM(type=alsaaudio.PCM_CAPTURE, mode=alsaaudio.PCM_NORMAL, card=ad)
-	pcm.setchannels(2)
-	pcm.setrate(192000)
-	pcm.setformat(alsaaudio.PCM_FORMAT_S16_LE)
-	pcm.setperiodsize(PERIOD)
+	pcm = fcd.get_pcm(PERIOD)
 	seq = 0L
 	while 1:
 		length, audio = pcm.read()
@@ -173,7 +238,7 @@ def fcdproplus_io(shared, ad, cd, swapiq, idx):
 				rcv.append((shared.clients[caddr].socket, (caddr[0], shared.clients[caddr].port)))
 		shared.release()
 		for i in xrange(0, len(audio)/(4*BUFFER_SIZE)):
-			if swapiq:
+			if fcd.swapiq:
 				txdata = short2float(audio[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 2) + short2float(audio[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 0) 
 			else:
 				txdata = short2float(audio[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 0) + short2float(audio[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 2) 
@@ -183,50 +248,14 @@ def fcdproplus_io(shared, ad, cd, swapiq, idx):
 					k[0].sendto(snd+txdata[j*TXLEN:j*TXLEN+min(len(txdata)-j*TXLEN, TXLEN)], k[1])
 			seq += 1
 
-def autodetect_ad():
-	try:
-		return 'hw:%s' % (alsaaudio.cards().index('V20'))
-	except:
-		return None
-
-def autodetect_cd():
-	return (0x04d8, 0xfb31)
-
-def setfreq(cd, freq):
-	d = apply(hid.device, cd)
-	d.write([0, 101] + map(ord, struct.pack('I', freq)))
-	if d.read(65)[0]!=101:
-		raise IOError, 'Cant set freq'
-	d.close()
-
-def fcdpp_init(cd):
-	d = apply(hid.device, cd)
-	#get ver
-	d.write([0,1])
-	ver = d.read(65)[2:15]
-	#set lna
-	d.write([0, 110, 1])
-	if d.read(65)[0]!=110:
-		raise IOError, 'Cant set lna gain'
-	#set mixer gain
-	d.write([0, 114, 1])
-	if d.read(65)[0]!=114:
-		raise IOError, 'Cant set mixer gain'
-	#set if gain
-	d.write([0, 117, 0])
-	if d.read(65)[0]!=117:
-		raise IOError, 'Cant set mixer gain'
-	d.close()
-
-def create_fcdproplus_thread(clients, ad=autodetect_ad(), cd=autodetect_cd(), swapiq=None, idx=0):
-	if not ad:
-		raise IOError, 'Audio device not found'
-	t = threading.Thread(target=fcdproplus_io, args=(clients, ad, cd, swapiq, idx))
+def create_fcdproplus_thread(clients, fcd, idx=0):
+	t = threading.Thread(target=fcdproplus_io, args=(clients, fcd, idx))
 	t.start()
-	return (ad, cd, idx, t)
+	return (idx, t)
 
 shared, lt = create_listener_thread('0.0.0.0', 11000)
-ad, cd, idx, ft = create_fcdproplus_thread(shared, swapiq='-s' in sys.argv)
+fcd = FCDProPlus(swapiq='-s' in sys.argv)
+idx, ft = create_fcdproplus_thread(shared, fcd)
 
 try:
 	while 1:
