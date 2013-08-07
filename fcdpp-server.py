@@ -225,6 +225,10 @@ def fcdproplus_io(shared, fcd, idx):
 	seq = 0L
 	while 1:
 		length, audio = pcm.read()
+		if length==-32:
+			print 'Overrun'
+		if length<1:
+			continue
 		rcv = []
 		shared.acquire()
 		for caddr in shared.clients.keys():
