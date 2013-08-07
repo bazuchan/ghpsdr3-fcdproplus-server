@@ -150,7 +150,7 @@ def short2float(inp, offset):
 	data = ''.join(data)
 	return data
 
-def fcdproplus_io(shared, ad, cd, idx):
+def fcdproplus_io(shared, ad, cd, swapiq, idx):
 	fcdpp_init(cd)
 	shared.acquire()
 	if idx in shared.receivers.keys():
@@ -173,7 +173,10 @@ def fcdproplus_io(shared, ad, cd, idx):
 				rcv.append((shared.clients[caddr].socket, (caddr[0], shared.clients[caddr].port)))
 		shared.release()
 		for i in xrange(0, len(audio)/(4*BUFFER_SIZE)):
-			txdata = short2float(audio[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 0) + short2float(audio[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 2) 
+			if swapiq:
+				txdata = short2float(audio[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 2) + short2float(audio[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 0) 
+			else:
+				txdata = short2float(audio[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 0) + short2float(audio[i*BUFFER_SIZE*4:(i+1)*BUFFER_SIZE*4], 2) 
 			for j in xrange(0, (len(txdata)+TXLEN-1)/(TXLEN)):
 				for k in rcv:
 					snd = struct.pack('LHH', seq, j*TXLEN, min(len(txdata)-j*TXLEN, TXLEN))
@@ -215,15 +218,15 @@ def fcdpp_init(cd):
 		raise IOError, 'Cant set mixer gain'
 	d.close()
 
-def create_fcdproplus_thread(clients, ad=autodetect_ad(), cd=autodetect_cd(), idx=0):
+def create_fcdproplus_thread(clients, ad=autodetect_ad(), cd=autodetect_cd(), swapiq=None, idx=0):
 	if not ad:
 		raise IOError, 'Audio device not found'
-	t = threading.Thread(target=fcdproplus_io, args=(clients, ad, cd, idx))
+	t = threading.Thread(target=fcdproplus_io, args=(clients, ad, cd, swapiq, idx))
 	t.start()
 	return (ad, cd, idx, t)
 
 shared, lt = create_listener_thread('0.0.0.0', 11000)
-ad, cd, idx, ft = create_fcdproplus_thread(shared)
+ad, cd, idx, ft = create_fcdproplus_thread(shared, swapiq='-s' in sys.argv)
 
 try:
 	while 1:
