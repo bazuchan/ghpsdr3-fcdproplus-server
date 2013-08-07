@@ -244,7 +244,7 @@ def fcdproplus_io(shared, fcd, idx):
 				txdata = i[1::2].tostring() + i[::2].tostring()
 			for j in xrange(0, (len(txdata)+TXLEN-1)/(TXLEN)):
 				for k in rcv:
-					snd = struct.pack('LHH', seq, j*TXLEN, min(len(txdata)-j*TXLEN, TXLEN))
+					snd = struct.pack('<IIHH', seq&0xFFFFFFFF, (seq>>32)&0xFFFFFFFF, j*TXLEN, min(len(txdata)-j*TXLEN, TXLEN))
 					k[0].sendto(snd+txdata[j*TXLEN:j*TXLEN+min(len(txdata)-j*TXLEN, TXLEN)], k[1])
 			seq += 1
 
