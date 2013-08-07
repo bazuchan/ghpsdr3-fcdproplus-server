@@ -204,15 +204,14 @@ class ListenerHandler(SocketServer.BaseRequestHandler):
 		shared.clients.pop(caddr)
 		shared.release()
 
-def listener(h, p, c):
+def listener(c, h, p):
 	server = Listener((h, p), ListenerHandler, c)
 	server.serve_forever()
 
-def create_listener_thread(h, p):
-	c = SharedData()
-	t = threading.Thread(target=listener, args=(h, p, c))
+def create_listener_thread(c, h, p):
+	t = threading.Thread(target=listener, args=(c, h, p))
 	t.start()
-	return (c, t)
+	return t
 
 def fcdproplus_io(shared, fcd, idx):
 	shared.acquire()
@@ -251,11 +250,12 @@ def fcdproplus_io(shared, fcd, idx):
 def create_fcdproplus_thread(clients, fcd, idx=0):
 	t = threading.Thread(target=fcdproplus_io, args=(clients, fcd, idx))
 	t.start()
-	return (idx, t)
+	return t
 
-shared, lt = create_listener_thread('0.0.0.0', 11000)
+shared = SharedData()
+lt = create_listener_thread(shared, '0.0.0.0', 11000)
 fcd = FCDProPlus(swapiq='-s' in sys.argv)
-idx, ft = create_fcdproplus_thread(shared, fcd)
+ft = create_fcdproplus_thread(shared, fcd, 0)
 
 try:
 	while 1:
