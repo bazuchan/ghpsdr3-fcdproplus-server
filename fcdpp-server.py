@@ -1,17 +1,31 @@
 #!/usr/bin/python
 
-import threading, SocketServer, alsaaudio, socket, time, re, sys, struct, os, hid, numpy
+import threading
+import SocketServer
+import alsaaudio
+import socket
+import re
+import sys
+import struct
+import os
+import hid
+import numpy
+import select
+import traceback
 
 CMDLEN = 1024 # should always fit
 BUFFER_SIZE = 1024 # from dspserver
 PERIOD = 1024 # BUFFER_SIZE*4/N, N=4
 TXLEN = 500 # from dspserver
+PTXLEN = 1024 # for predsp
 
 class SharedData(object):
-	def __init__(self, *args, **kwargs):
+	def __init__(self, predsp=False):
 		self.mutex = threading.Lock()
 		self.clients = {}
 		self.receivers = {}
+		self.predsp = predsp
+		self.exit = False
 
 	def acquire(self):
 		self.mutex.acquire()
@@ -20,8 +34,9 @@ class SharedData(object):
 		self.mutex.release()
 
 class ConnectedClient(object):
-	def __init__(self, *args, **kwargs):
+	def __init__(self):
 		self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+		self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8*1024**2)
 		self.receiver = -1
 		self.port = -1
 
@@ -108,6 +123,10 @@ class ListenerHandler(SocketServer.BaseRequestHandler):
 		shared.clients[caddr] = ConnectedClient()
 		shared.release()
 		while 1:
+			while not select.select([self.request], [], [], 1)[0]:
+				if shared.exit:
+					self.request.close()
+					return
 			try:
 				data = self.request.recv(CMDLEN)
 			except:
@@ -204,14 +223,23 @@ class ListenerHandler(SocketServer.BaseRequestHandler):
 		shared.clients.pop(caddr)
 		shared.release()
 
-def listener(c, h, p):
-	server = Listener((h, p), ListenerHandler, c)
-	server.serve_forever()
-
-def create_listener_thread(c, h, p):
-	t = threading.Thread(target=listener, args=(c, h, p))
-	t.start()
-	return t
+def run_listener(c, h, p):
+	try:
+		server = Listener((h, p), ListenerHandler, c)
+	except:
+		c.exit = True
+		traceback.print_exc()
+		return
+	try:
+		server.serve_forever()
+	except KeyboardInterrupt:
+		server.shutdown()
+		server.server_close()
+		c.exit = True
+		try:
+			c.release()
+		except:
+			pass
 
 def fcdproplus_io(shared, fcd, idx):
 	shared.acquire()
@@ -219,13 +247,14 @@ def fcdproplus_io(shared, fcd, idx):
 		shared.release()
 		raise IOError, 'Receiver with inde %d already connected' % (idx)
 	shared.receivers[idx] = fcd
+	predsp = shared.predsp
 	shared.release()
 	pcm = fcd.get_pcm(PERIOD)
 	seq = 0L
 	while 1:
 		length, audio = pcm.read()
 		if length==-32:
-			print 'Overrun'
+			sys.stderr.write('Overrun\n')
 		if length<1:
 			continue
 		rcv = []
@@ -234,33 +263,39 @@ def fcdproplus_io(shared, fcd, idx):
 			if shared.clients[caddr].receiver==idx and shared.clients[caddr].port!=-1:
 				rcv.append((shared.clients[caddr].socket, (caddr[0], shared.clients[caddr].port)))
 		shared.release()
-		naudio = numpy.fromstring(audio, dtype="<h")/numpy.float32(32767.0)
-		naudio.resize(len(naudio)/(BUFFER_SIZE*2), BUFFER_SIZE*2)
-		for i in naudio:
-			if fcd.swapiq:
-				txdata = i[::2].tostring() + i[1::2].tostring()
-			else:
-				txdata = i[1::2].tostring() + i[::2].tostring()
-			for j in xrange(0, (len(txdata)+TXLEN-1)/(TXLEN)):
+		if shared.exit:
+			return
+		if predsp:
+			for j in xrange(0, (len(audio)+PTXLEN-1)/(PTXLEN)):
 				for k in rcv:
-					snd = struct.pack('<IIHH', seq&0xFFFFFFFF, (seq>>32)&0xFFFFFFFF, j*TXLEN, min(len(txdata)-j*TXLEN, TXLEN))
-					k[0].sendto(snd+txdata[j*TXLEN:j*TXLEN+min(len(txdata)-j*TXLEN, TXLEN)], k[1])
-			seq += 1
+					snd = struct.pack('<I', seq&0xFFFFFFFF)
+					k[0].sendto(snd+audio[j*PTXLEN:j*PTXLEN+min(len(audio)-j*PTXLEN, PTXLEN)], (k[1][0], k[1][1]+500))
+		else:
+			naudio = numpy.fromstring(audio, dtype="<h")/numpy.float32(32767.0)
+			naudio.resize(len(naudio)/(BUFFER_SIZE*2), BUFFER_SIZE*2)
+			for i in naudio:
+				if fcd.swapiq:
+					txdata = i[::2].tostring() + i[1::2].tostring()
+				else:
+					txdata = i[1::2].tostring() + i[::2].tostring()
+				for j in xrange(0, (len(txdata)+TXLEN-1)/(TXLEN)):
+					for k in rcv:
+						snd = struct.pack('<IIHH', seq&0xFFFFFFFF, (seq>>32)&0xFFFFFFFF, j*TXLEN, min(len(txdata)-j*TXLEN, TXLEN))
+						k[0].sendto(snd+txdata[j*TXLEN:j*TXLEN+min(len(txdata)-j*TXLEN, TXLEN)], k[1])
+				seq += 1
 
 def create_fcdproplus_thread(clients, fcd, idx=0):
 	t = threading.Thread(target=fcdproplus_io, args=(clients, fcd, idx))
 	t.start()
 	return t
 
-shared = SharedData()
-lt = create_listener_thread(shared, '0.0.0.0', 11000)
-fcd = FCDProPlus(swapiq='-s' in sys.argv)
+shared = SharedData(predsp='-p' in sys.argv)
+try:
+	fcd = FCDProPlus(swapiq='-s' in sys.argv)
+except IOError:
+	sys.stderr.write('FCDPro+ device not found\n')
+	sys.exit(0)
 ft = create_fcdproplus_thread(shared, fcd, 0)
 
-try:
-	while 1:
-		time.sleep(1)
-except KeyboardInterrupt:
-	print 'exiting...'
-	os.kill(os.getpid(), 15)
+run_listener(shared, '0.0.0.0', 11000)
 
