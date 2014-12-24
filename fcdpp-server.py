@@ -12,6 +12,7 @@ import hid
 import numpy
 import select
 import traceback
+import argparse
 
 CMDLEN = 1024 # should always fit
 BUFFER_SIZE = 1024 # from dspserver
@@ -41,7 +42,7 @@ class ConnectedClient(object):
 		self.port = -1
 
 class FCDProPlus(object):
-	def __init__(self, ad=None, cd=None, swapiq=None, lna_gain=True, mixer_gain=True, if_gain=0, init_freq=7000000):
+	def __init__(self, ad=None, cd=None, swapiq=None, lna_gain=True, mixer_gain=True, if_gain=0, init_freq=7000000, ppm_offset=0.0):
 		self.ad = ad
 		if not self.ad:
 			self.ad = self.autodetect_ad()
@@ -51,7 +52,7 @@ class FCDProPlus(object):
 		if not self.ad or not self.cd:
 			raise IOError, 'FCDPro+ device not found'
 		self.swapiq = swapiq
-
+		self.ppm_offset = ppm_offset
 		self.ver = self.get_fw_ver()
 		self.set_lna_gain(lna_gain)
 		self.set_mixer_gain(mixer_gain)
@@ -97,7 +98,8 @@ class FCDProPlus(object):
 
 	def set_freq(self, freq):
 		d = apply(hid.device, self.cd)
-		d.write([0, 101] + map(ord, struct.pack('I', freq)))
+		corrected_freq = freq + int((float(freq)/1000000.0)*float(self.ppm_offset))
+		d.write([0, 101] + map(ord, struct.pack('I', corrected_freq)))
 		if d.read(65)[0]!=101:
 			raise IOError, 'Cant set freq'
 		d.close()
@@ -289,9 +291,24 @@ def create_fcdproplus_thread(clients, fcd, idx=0):
 	t.start()
 	return t
 
-shared = SharedData(predsp='-p' in sys.argv)
+# main
+parser = argparse.ArgumentParser(description='fcdpp-server.py')
+parser.add_argument('-s', '--swapiq', action='store_true', default=False, help = 'Swap the I and Q inputs, reversing the spectrum')
+parser.add_argument('-p', '--predsp', action='store_true', default=False, help = 'Offload some processing to an instance of predsp.py')
+parser.add_argument('-o', '--ppm_offset', type=float, default=float(0), help = 'Frequency offset in parts per million, as float i.e. 3.9')
+args = parser.parse_args()
+
+if args.ppm_offset != 0.0:
+    print "ppm_offset is " + str(args.ppm_offset)
+if args.swapiq:
+    print "swapiq is " + str(args.swapiq)
+if args.predsp:
+    print "predsp is " + str(args.predsp)
+
+shared = SharedData(args.predsp)
+
 try:
-	fcd = FCDProPlus(swapiq='-s' in sys.argv)
+    fcd = FCDProPlus(swapiq=args.swapiq, ppm_offset = args.ppm_offset)
 except IOError:
 	sys.stderr.write('FCDPro+ device not found\n')
 	sys.exit(0)
