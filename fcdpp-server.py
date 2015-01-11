@@ -300,7 +300,7 @@ parser.add_argument('-m', '--mixer_gain', action='store_true', default=False, he
 parser.add_argument('-i', '--if_gain', type=int, default=float(0), help = 'Specify the IF gain in dB as integer, default 0.')
 parser.add_argument('-o', '--ppm_offset', type=float, default=float(0), help = 'Frequency offset in parts per million, as float i.e. 3.9')
 parser.add_argument('-a', '--ipaddr', default='0.0.0.0', help = 'The server\'s IPv4 address to bind to. Default is all addresses, '+
-                                                                'i.e. 0.0.0.0 or 127.0.0.2 (alias addresses can be used)')
+                                                                'i.e. 0.0.0.0 (alias addresses can be used)')
 args = parser.parse_args()
 
 if args.ppm_offset != 0.0:
