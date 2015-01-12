@@ -24,3 +24,6 @@ to host running dspserver. For that purpouse I wrote small script called predsp.
  - on more capable host run 'predsp.py' and 'dspserver --server <embedded host ip>'
  - run QtRadio or another client and point it to dspserver's address
 
+License:
+ GPLv3
+
