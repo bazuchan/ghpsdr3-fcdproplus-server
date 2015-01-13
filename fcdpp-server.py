@@ -295,7 +295,12 @@ def create_fcdproplus_thread(clients, fcd, idx=0):
 parser = argparse.ArgumentParser(description='fcdpp-server.py')
 parser.add_argument('-s', '--swapiq', action='store_true', default=False, help = 'Swap the I and Q inputs, reversing the spectrum')
 parser.add_argument('-p', '--predsp', action='store_true', default=False, help = 'Offload some processing to an instance of predsp.py')
+parser.add_argument('-l', '--lna_gain',   action='store_true', default=False, help = 'Enable the LNA gain.')
+parser.add_argument('-m', '--mixer_gain', action='store_true', default=False, help = 'Enable the mixer gain.')
+parser.add_argument('-i', '--if_gain', type=int, default=float(0), help = 'Specify the IF gain in dB as integer, default 0.')
 parser.add_argument('-o', '--ppm_offset', type=float, default=float(0), help = 'Frequency offset in parts per million, as float i.e. 3.9')
+parser.add_argument('-a', '--ipaddr', default='0.0.0.0', help = 'The server\'s IPv4 address to bind to. Default is all addresses, '+
+                                                                'i.e. 0.0.0.0 (alias addresses can be used)')
 args = parser.parse_args()
 
 if args.ppm_offset != 0.0:
@@ -308,11 +313,11 @@ if args.predsp:
 shared = SharedData(args.predsp)
 
 try:
-    fcd = FCDProPlus(swapiq=args.swapiq, ppm_offset = args.ppm_offset)
+    fcd = FCDProPlus(swapiq=args.swapiq, ppm_offset=args.ppm_offset, lna_gain=args.lna_gain, mixer_gain=args.mixer_gain, if_gain=args.if_gain)
 except IOError:
 	sys.stderr.write('FCDPro+ device not found\n')
 	sys.exit(0)
-ft = create_fcdproplus_thread(shared, fcd, 0)
 
-run_listener(shared, '0.0.0.0', 11000)
+ft = create_fcdproplus_thread(shared, fcd, 0)
+run_listener(shared, args.ipaddr, 11000)
 
